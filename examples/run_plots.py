@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-from itertools import product
+from itertools import product, combinations
 
 
 project_root = Path(__file__).resolve().parent.parent
@@ -281,6 +281,12 @@ def main():
         eval_env, None, "Single Drug", EVAL_RUNS, EVAL_STEPS, drug_idx=3
     )
 
+    alt_results = {}
+    for pair in combinations(range(num_drugs), 2):
+        alt_results[pair] = run_eval(
+            eval_env, None, "Alternating Policy", EVAL_RUNS, EVAL_STEPS, drug_pair=pair
+        )
+
     # CREATE OUTPUT DIRECTORIES
     base_dir = project_root / "log" / sig
     traj_dir = base_dir / "trajectories"
@@ -295,7 +301,7 @@ def main():
     # 1. Fitness Trajectories
     print("Plotting Fitness Trajectories...")
 
-    def plot_fitness_trajectories(max_steps=None, suffix=""):
+    def plot_fitness_trajectories(max_steps=None, suffix="", fig_type="2C"):
         if max_steps is None:
             max_steps = EVAL_STEPS
 
@@ -353,33 +359,59 @@ def main():
         )
 
         # Single Drugs
-        colors = ["#FF0000", "#32CD32", "#8A2BE2", "#FF1493"]
-
-        for d in range(num_drugs):
-            if d == 0:
-                m, std = sd1_m, sd1_std
-            elif d == 1:
-                m, std = sd2_m, sd2_std
-            elif d == 2:
-                m, std = sd3_m, sd3_std
-            else:
-                m, std = sd4_m, sd4_std
-            plt.plot(
-                steps,
-                norm(m),
-                color=colors[d],
-                ls="-.",
-                lw=2.5,
-                label=f"Drug {d} Mean",
-                alpha=1.0,
-            )
-            plt.fill_between(
-                steps,
-                norm(m) - norm_std(std),
-                norm(m) + norm_std(std),
-                color=colors[d],
-                alpha=0.2,
-            )
+        if fig_type == "2C":
+            colors = ["#FF0000", "#32CD32", "#8A2BE2", "#FF1493"]
+            for d in range(num_drugs):
+                if d == 0:
+                    m, std = sd1_m, sd1_std
+                elif d == 1:
+                    m, std = sd2_m, sd2_std
+                elif d == 2:
+                    m, std = sd3_m, sd3_std
+                else:
+                    m, std = sd4_m, sd4_std
+                plt.plot(
+                    steps,
+                    norm(m),
+                    color=colors[d],
+                    ls="-.",
+                    lw=2.5,
+                    label=f"Drug {d} Mean",
+                    alpha=1.0,
+                )
+                plt.fill_between(
+                    steps,
+                    norm(m) - norm_std(std),
+                    norm(m) + norm_std(std),
+                    color=colors[d],
+                    alpha=0.2,
+                )
+        # Alternating Drugs
+        if fig_type == "2D":
+            colors = [
+                "#e6194B", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
+                "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabed4",
+                "#469990", "#dcbeff", "#9A6324", "#fffac8", "#800000",
+                "#aaffc3", "#808000", "#ffd8b1", "#000075", "#a9a9a9"
+            ]
+            for index, key in enumerate(alt_results.keys()):
+                m, std, _, _, _ = alt_results[key]
+                plt.plot(
+                    steps,
+                    norm(m),
+                    color=colors[index],
+                    ls="-.",
+                    lw=2.5,
+                    label=f"Drug Pair {key} Mean",
+                    alpha=1.0,
+                )
+                plt.fill_between(
+                    steps,
+                    norm(m) - norm_std(std),
+                    norm(m) + norm_std(std),
+                    color=colors[index],
+                    alpha=0.2,
+                )
 
         plt.ylim(0, 1)
         plt.grid(True, ls="--", alpha=0.4)
@@ -394,13 +426,15 @@ def main():
         plt.legend(fontsize=10, loc="center right", bbox_to_anchor=(1.25, 0.5))
         plt.tight_layout()
         plt.savefig(
-            str(traj_dir / f"fitness_trajectories{suffix}.png"),
+            str(traj_dir / f"fitness_trajectories_{fig_type}{suffix}.png"),
             dpi=200,
             bbox_inches="tight",
         )
         plt.close()
 
-    plot_fitness_trajectories(max_steps=EVAL_STEPS, suffix="")
+    plot_fitness_trajectories(max_steps=EVAL_STEPS, suffix="", fig_type="2C")
+    plot_fitness_trajectories(max_steps=EVAL_STEPS, suffix="", fig_type="2D")
+
     plot_fitness_trajectories(max_steps=min(100, EVAL_STEPS), suffix="_zoomed")
 
     # Define policy functions for plotting
