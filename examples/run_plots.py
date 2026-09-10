@@ -15,6 +15,7 @@ from remarc.agents.tianshou_agent import (
     load_best_fn,
     RandomPolicy,
     SingleDrugPolicy,
+    AlternatingDrugPolicy,
     train_wf_landscapes,
 )
 from remarc.envs.wright_fisher_env import WrightFisherEnv
@@ -49,7 +50,7 @@ def binary_indices(N):
 
 
 def run_eval(
-    env, policy, agent_type="RL", num_runs=10, episode_steps=1000, drug_idx=0
+    env, policy, agent_type="RL", num_runs=10, episode_steps=1000, drug_idx=0, drug_pair=None
 ):  # DRUG INDEX NOT USED UNLESS SINGLE DRUG POLICY
     all_fit = []
     all_states = []
@@ -68,6 +69,10 @@ def run_eval(
             agent = RandomPolicy(env.num_drugs)
         elif agent_type == "Single Drug":
             agent = SingleDrugPolicy(drug_idx)
+        elif agent_type == "Alternating Policy":
+            assert drug_pair is not None, "Please provide a drug pair for Alternating Policy"
+            agent = AlternatingDrugPolicy(drug_pair)
+            agent.reset()
         else:
             agent = policy
 

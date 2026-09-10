@@ -273,6 +273,30 @@ class SingleDrugPolicy:
     def eval(self):
         return self
 
+class AlternatingDrugPolicy:
+    """
+    Policy that alternates between the two provided drugs
+    """
+    def __init__(self, drug_pair: tuple):
+        self.drug_pair = drug_pair
+
+        # Alternating factor to "remember" what last drug ran was.
+        self.offset = 0
+
+        self.num_drugs = len(drug_pair)
+
+    def reset(self):
+        self.offset = 0
+
+    def __call__(self, batch, **kwargs):
+        n = len(batch.obs)
+        acts = np.full(n, self.drug_pair[self.offset % self.num_drugs], dtype=int)
+        self.offset += 1
+        return Batch(act=acts)
+
+    def eval(self):
+        return self
+
 
 def load_random_policy(p: P):
     """Return a RandomPolicy that samples uniformly from the action space."""
@@ -627,7 +651,9 @@ def get_ppo_policy(p: P, train_envs: DummyVectorEnv | VectorEnvWrapper) -> PPOPo
         device=device,
     ).to(device)
 
-    optim = Adam(list(actor.parameters()) + list(critic.parameters()), lr=p.lr)
+    # SSA: Added set wrapped around joined lists to de-duplicate trunk parameters
+    params = list(dict.fromkeys(list(actor.parameters()) + list(critic.parameters())))
+    optim = Adam(params, lr=p.lr)
 
     policy = PPOPolicy(
         actor=actor,
