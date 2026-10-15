@@ -340,6 +340,7 @@ def train_wf_landscapes(
     signature: str | None = None,
     trial: "optuna.Trial | None" = None,
     seed: int | None = None,
+    landscapes: list | None = None,
 ):
     # --- Save params before anything else ---
     save_run_params(p, signature)
@@ -359,7 +360,9 @@ def train_wf_landscapes(
     landscape_list = []
     is_three_state = False
 
-    if hasattr(p, "dataset") and p.dataset == "eight_state":
+    if landscapes is not None:
+        landscape_list = list(landscapes)
+    elif hasattr(p, "dataset") and p.dataset == "eight_state":
         from remarc.envs import define_eight_state_landscapes
 
         print(

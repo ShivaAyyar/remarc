@@ -171,6 +171,33 @@ def define_three_state_landscapes(as_dict=False, amplification=1.0):
         return {name: list(row) for name, row in zip(drug_names, raw)}
     return raw
 
+def define_rmf_landscapes(N, sigma=1.0, num_drugs=4, pop_size=10000, max_Ns=0.1, seed=None, max_tries=1000):
+    """
+    Generates landscape of size 2^N * num_drugs.
+    Returns np.array of shape (num_drugs, 2^N)
+    
+    """
+    
+    if seed is not None:
+        np.random.seed(seed)
+    for _ in range(max_tries):
+        # Generating random landscpe
+        _, drugs = generate_landscapes2(N=N, sigma=sigma, num_drugs=num_drugs)
+        raw = np.array(drugs)
+        # Asserting that one drug does not dominate.
+        if len(set(np.argmin(raw, axis=0))) == 1:
+            continue
+
+        # Rescaling such that max distance to wt within each drug satisfies |Ns| <= max_Ns
+        # gets wt genotypes
+        r0 = raw[:, [0]]
+
+        kappa = max_Ns / (pop_size * np.max(np.abs(raw-r0)))
+        f = 1.0 + kappa * (raw - raw.mean())
+
+        return f
+
+    raise RuntimeError("no valid landscape set found")
 
 def define_trap_landscapes(as_dict=False, amplification=1.0):
     """

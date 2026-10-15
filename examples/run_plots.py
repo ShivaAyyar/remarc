@@ -23,6 +23,7 @@ from remarc.envs.utils import (
     define_four_state_landscapes,
     define_three_state_landscapes,
     define_eight_state_landscapes,
+    define_rmf_landscapes,
 )
 from remarc.core.landscapes import Landscape
 from tianshou.env import DummyVectorEnv
@@ -119,7 +120,10 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--arch", type=str, default="256", choices=["32", "64", "128", "256", "baseline"], help="Network architecture size")
-    parser.add_argument("--dataset", type=str, default="four_state", choices=["three_state", "four_state", "eight_state"], help="Dataset to run on")
+    parser.add_argument("--dataset", type=str, default="four_state", choices=["three_state", "four_state", "eight_state", "rmf"], help="Dataset to run on")
+    parser.add_argument("--N", type=int, default=3, help="IF DATASET == RMF: Landscape dimensionality (num loci)")
+    parser.add_argument("--sigma", type=float, default=1.0, help="IF DATASET == RMF: STDEV of noise for RMF (1.0 for rugged, 0.0 for smooth)")
+    parser.add_argument("--seed", type=int, default=0, help="IF DATASET == RMF: optional seed for RMF generation")
     parser.add_argument("--dh", type=int, default=1, help="Delta horizon")
     parser.add_argument("--delta", type=float, default=0.5, help="Delta multiplier")
     parser.add_argument("--train", action="store_true", help="Set to train the model")
@@ -131,7 +135,6 @@ def main():
     MR = 1e-5
     EPOCHS = 300
     EPISODE_STEPS = 500
-    REWARD_SCALE = 100.0
     AMP = 1.0
     EVAL_STEPS = 5000
     EVAL_RUNS = 100
@@ -146,7 +149,13 @@ def main():
     L = args.L  # Horizon length for SHEPHERD MDP
     TRAIN = args.train  # Set to True to train the model, False to load existing model
 
-    sig = f"{DATASET}_dh_{delta_horizon}_d{delta}_g{gps}_gam{gamma}_e{ent}_b{batch}"
+    # RMF FLAGS
+    MAX_NS = 0.1
+
+    tag = (f"rmf_N{args.N}_sig{args.sigma}_Ns{MAX_NS}_seed{args.seed}"
+       if DATASET == "rmf" else DATASET)
+    sig = f"{tag}_dh_{delta_horizon}_d{delta}_g{gps}_gam{gamma}_e{ent}_b{batch}"
+
 
     if args.arch == "32":
         hidden, head = [32, 32], [32]
@@ -166,6 +175,13 @@ def main():
         landscape_data = define_four_state_landscapes(amplification=AMP)
     elif DATASET == "eight_state":
         landscape_data = define_eight_state_landscapes()
+    elif DATASET == "rmf":
+        landscape_data = define_rmf_landscapes(N=args.N,
+                                               sigma=args.sigma,
+                                               num_drugs=4,
+                                               pop_size=10000,
+                                               max_Ns=MAX_NS,
+                                               seed=args.seed)
     else:
         raise ValueError(f"Unknown dataset: {DATASET}")
 
@@ -174,6 +190,13 @@ def main():
         v_N = int(np.log2(len(landscape_data[0])))
 
     g_min, g_max = np.min(landscape_data), np.max(landscape_data)
+
+    # Rescaled so that fitness magnitude differences do not have an impact on reward structure.
+    if DATASET == "rmf":
+        REWARD_SCALE = 2.0 / (g_max - g_min)
+    else:
+        REWARD_SCALE = 100
+
     landscape_list = [
         Landscape(v_N, sigma=0.0, ls=landscape_data[i], g_min=g_min, g_max=g_max)
         for i in range(num_drugs)
@@ -237,17 +260,17 @@ def main():
             policy = load_best_fn(policy, f"best_policy_{sig}.pth")
         except Exception:
             # run the training
-            train_wf_landscapes(p, signature=sig)
+            train_wf_landscapes(p, signature=sig, landscapes=landscape_list)
             policy = get_ppo_policy(p, test_envs).eval()
             policy = load_best_fn(policy, f"best_policy_{sig}.pth")
     else:
-        train_wf_landscapes(p, signature=sig)
+        train_wf_landscapes(p, signature=sig, landscapes=landscape_list)
         policy = get_ppo_policy(p, test_envs).eval()
         policy = load_best_fn(policy, f"best_policy_{sig}.pth")
 
 
     shepherd_mdp = ShepherdMDP.from_env(eval_env, L=L, discount=0.99)
-    cache_path = project_root / "log" / f"shepherd_L{L}_{DATASET}.npz"
+    cache_path = project_root / "log" / f"shepherd_L{L}_{tag}.npz"
 
     if cache_path.exists():
         print(f"Loading cached SHEPHERD MDP (L={L})...")
@@ -547,7 +570,7 @@ def main():
             fig_sh_sim_p.savefig(str(pca_dir / "dominant_modes_shepherd_simplex_paths.png"), dpi=200, bbox_inches="tight")
             plt.close(fig_sh_sim_c); plt.close(fig_sh_sim_p)
     latent_mapping = None
-    if DATASET == "eight_state":
+    if 2**v_N > 4:
         print("Computing latent mapping for 8-state system...")
         all_rl_states = np.concatenate(rl_states, axis=0)
         all_clr = clr_transform(all_rl_states)
