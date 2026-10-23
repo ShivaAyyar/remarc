@@ -145,6 +145,8 @@ cython_debug/
 prof_practice.stats
 *.pdf
 log/
+!log/runtime/
+!log/runtime/**
 dontsetup.txt
 model_info*.json
 pareto_frontier_results.csv
