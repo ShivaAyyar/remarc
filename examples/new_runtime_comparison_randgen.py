@@ -1,5 +1,5 @@
-
 import argparse
+import itertools
 import sys
 import time
 from pathlib import Path
@@ -22,16 +22,17 @@ from remarc.envs.utils import (
     define_eight_state_landscapes,
     define_four_state_landscapes,
     define_three_state_landscapes,
+    define_rmf_landscapes,
 )
 from remarc.envs.wright_fisher_env import ThreeGenotypeEnv, WrightFisherEnv
 
 # Direclty copied these from run plots py
 LR = 1e-4
-MR = 1e-5 
+MR = 1e-5
 EPISODE_STEPS = 500
 REWARD_SCALE = 100.0
 AMP = 1.0
-GPS = 10  
+GPS = 10
 GAMMA = 0.99
 ENT = 0.1
 BATCH = 64
@@ -77,7 +78,7 @@ def make_eval_env(name, landscapes, num_drugs, v_N, eval_steps, reward_scale):
         seq_length=v_N,
         random_start=False,
         total_generations=GPS * eval_steps + 100,
-        reward_scale=REWARD_SCALE,
+        reward_scale=reward_scale,
         stochastic=True,
         delta_multiplier=DELTA,
         mutation_rate=MR,
@@ -135,14 +136,14 @@ def train_rl(name, tag, env, landscapes, num_drugs, v_N, reward_scale, epochs):
     return policy, seconds
 
 
-def effectiveness(env, choose_action, runs, steps, g_min, g_max, tail=0.2):
+def effectiveness(env, choose_action, runs, steps, g_min, g_max, tail=0.01):
     finals = []
     for _ in range(runs):
         obs, _ = env.reset()
         fitness = []
         for _ in range(steps):
-            fitness.append(env.get_fitness())
             obs, _, terminated, truncated, _ = env.step(choose_action(obs))
+            fitness.append(env.get_fitness())
             if terminated or truncated:
                 break
         k = max(1, int(len(fitness) * tail))
@@ -150,61 +151,89 @@ def effectiveness(env, choose_action, runs, steps, g_min, g_max, tail=0.2):
     return (np.mean(finals) - g_min) / (g_max - g_min)
 
 
-def make_plot(df, out_dir):
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    x = np.arange(len(df))
-    labels = [f"{g} genotypes" for g in df["genotypes"]]
+def make_plot(df, out_dir, tag):
+    df = df.assign(ratio_mdp=df["fit_mdp"] / df["fit_best_single"],
+                   ratio_rl=df["fit_rl"] / df["fit_best_single"],
+                   ratio_random=df["fit_random"] / df["fit_best_single"])
+    grouped = df.groupby("genotypes")[["mdp_s", "rl_s", "fit_mdp", "fit_rl", "fit_best_single", "fit_random", "ratio_mdp", "ratio_rl", "ratio_random"]]
+    mean, sem = grouped.mean(), grouped.sem()
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    x = np.arange(len(mean))
+    labels = [f"{g} genotypes" for g in mean.index]
 
     # Left: runtime
     ax = axes[0]
     w = 0.35
-    b1 = ax.bar(x - w / 2, df["mdp_s"], w, label="MDP (SHEPHERD)")
-    b2 = ax.bar(x + w / 2, df["rl_s"], w, label="RL (PPO)")
+    b1 = ax.bar(x - w / 2, mean["mdp_s"], w, yerr=sem["mdp_s"], capsize=4, label="MDP (SHEPHERD)")
+    b2 = ax.bar(x + w / 2, mean["rl_s"], w, yerr=sem["rl_s"], capsize=4, label="RL (PPO)")
     ax.bar_label(b1, fmt="%.0f s")
     ax.bar_label(b2, fmt="%.0f s")
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    ax.set_ylabel("Runtime (seconds)")
+    ax.set_ylabel("Runtime (seconds, mean ± SEM)")
     ax.set_title("Runtime")
     ax.legend()
 
-    # Right: effectiveness
+    # Middle: effectiveness
     ax = axes[1]
     cols = [("fit_mdp", "MDP (SHEPHERD)"), ("fit_rl", "RL (PPO)"),
             ("fit_best_single", "Best single drug"), ("fit_random", "Random")]
     w = 0.2
     for i, (col, name) in enumerate(cols):
-        ax.bar(x + (i - 1.5) * w, df[col], w, label=name)
+        ax.bar(x + (i - 1.5) * w, mean[col], w, yerr=sem[col], capsize=3, label=name)
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    ax.set_ylabel("Normalized mean fitness (lower is better)")
+    ax.set_ylabel("Normalized mean fitness, mean ± SEM")
     ax.set_title("Effectiveness")
-    ax.set_ylim(0, df[[c for c, _ in cols]].max().max() * 1.3)
+    ax.set_ylim(0, (mean + sem.fillna(0))[[c for c, _ in cols]].max().max() * 1.3)
     ax.legend(ncol=2, loc="upper left")
 
+    # Right: ratio to best single drug
+    ax = axes[2]
+    ratios = [("ratio_mdp", "MDP (SHEPHERD)", "C0"), ("ratio_rl", "RL (PPO)", "C1"),
+              ("ratio_random", "Random", "C3")]
+    w = 0.25
+    for i, (col, name, color) in enumerate(ratios):
+        ax.bar(x + (i - 1) * w, mean[col], w, yerr=sem[col], capsize=3, color=color, label=name)
+    ax.axhline(1.0, color="k", ls="--", lw=1, label="Best single drug")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    #ax.set_yscale("log")
+    ax.set_ylabel("Fitness / best single drug, mean ± SEM (< 1 is better)")
+    ax.set_title("Relative to best single drug")
+    ax.legend()
+
     plt.tight_layout()
-    plt.savefig(out_dir / "runtime_comparison.png", dpi=200)
-    print(f"Saved graph to {out_dir / 'runtime_comparison.png'}")
+    plt.savefig(out_dir / f"{tag}_runtime_comparison.png", dpi=200)
+    print(f"Saved graph to {out_dir / f'{tag}_runtime_comparison.png'}")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--datasets", nargs="+", default=["three_state", "four_state", "eight_state"])
+    ap.add_argument("--N", type=int, nargs="+", default=[3], help="RMF loci per landscape (genotypes = 2^N)")
+    ap.add_argument("--sigma", type=float, default=1.0, help="RMF noise SD (1.0 rugged, 0.0 smooth)")
+    ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2, 3, 4], help="one RMF landscape per seed")
     ap.add_argument("--L", type=int, default=3, help="MDP grid points per axis (run_plots default)")
     ap.add_argument("--epochs", type=int, default=300, help="PPO epochs (run_plots uses 300)")
     ap.add_argument("--eval-runs", type=int, default=20, help="evaluation runs per policy")
-    ap.add_argument("--eval-steps", type=int, default=1000, help="steps per evaluation run")
+    ap.add_argument("--eval-steps", type=int, default=10000, help="steps per evaluation run")
     ap.add_argument("--skip-rl", action="store_true")
     args = ap.parse_args()
+    
+    tag = f"N{'-'.join(map(str, args.N))}_sig{args.sigma}_seeds{'-'.join(map(str, args.seeds))}_L{args.L}_epochs{args.epochs}_eval-runs{args.eval_runs}_eval-steps{args.eval_steps}"
 
     out_dir = project_root / "log" / "runtime"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     rows = []
-    for name in args.datasets:
-        landscapes, num_drugs, v_N, g_min, g_max, reward_scale = load_dataset(name)
-        env = make_eval_env(name, landscapes, num_drugs, v_N, reward_scale, args.eval_steps)
-        print(f"\n=== {name}: {env.num_genotypes} genotypes, {num_drugs} drugs ===")
+
+    name = "rmf"
+
+    for N, seed in itertools.product(args.N, args.seeds):
+        landscapes, num_drugs, v_N, g_min, g_max, reward_scale = load_dataset(name, N=N, sigma=args.sigma, seed=seed)
+        env = make_eval_env(name, landscapes, num_drugs, v_N, args.eval_steps, reward_scale)
+        print(f"\n=== {name} N={N} seed={seed}: {env.num_genotypes} genotypes, {num_drugs} drugs ===")
 
         print(f"Solving MDP (L={args.L})...")
         mdp, mdp_s = solve_mdp(env, args.L)
@@ -213,7 +242,7 @@ def main():
         policy, rl_s = None, float("nan")
         if not args.skip_rl:
             print(f"Training PPO ({args.epochs} epochs)...")
-            policy, rl_s = train_rl(name, name, env, landscapes, num_drugs, v_N, reward_scale, args.epochs)
+            policy, rl_s = train_rl(name, f"rmf_N{N}_sig{args.sigma}_Ns{MAX_NS}_seed{seed}", env, landscapes, num_drugs, v_N, reward_scale, args.epochs)
             print(f"PPO done in {rl_s:.1f}s")
 
         print("Evaluating policies...")
@@ -230,18 +259,19 @@ def main():
         fit_single = min(ev(lambda obs, d=d: d) for d in range(num_drugs))
 
         rows.append({
-            "dataset": name, "genotypes": n, "drugs": num_drugs, "L": args.L,
+            "dataset": name, "N": N, "sigma": args.sigma, "seed": seed, "genotypes": n, "drugs": num_drugs, "L": args.L,
             "epochs": args.epochs, "mdp_s": mdp_s, "rl_s": rl_s,
             "fit_mdp": fit_mdp, "fit_rl": fit_rl,
             "fit_best_single": fit_single, "fit_random": fit_random,
         })
-        pd.DataFrame(rows).to_csv(out_dir / "runtime_comparison.csv", index=False)  # save as we go
+        pd.DataFrame(rows).to_csv(out_dir / f"{tag}_runtime_comparison.csv", index=False)  # save as we go
         print(rows[-1])
 
     df = pd.DataFrame(rows)
     print("\n", df.to_string(index=False))
-    make_plot(df, out_dir)
-    plt.show()
+
+    make_plot(df, out_dir, tag)
+    #plt.show()
 
 
 if __name__ == "__main__":
