@@ -42,9 +42,17 @@ N_FRAMES = 1
 STEPS_PER_EPOCH = 10000
 POP_SIZE = 10000
 MAX_NS = 0.1
+# Maps landscape sies to an appropriate discretisation level
+L_BINS = {
+    2: 20,
+    3: 3,
+    4: 3,
+    5: 3,
+    6: 3,
+    7: 3,
+}
 
-
-def load_dataset(name, N=None, sigma=1.0, num_drugs=4, seed=None):
+def load_dataset(name, N=None, sigma=1.0, num_drugs=4, seed=None, max_Ns=MAX_NS):
     if name == "three_state":
         data, v_N = define_three_state_landscapes(amplification=AMP), 2
     elif name == "four_state":
@@ -53,7 +61,7 @@ def load_dataset(name, N=None, sigma=1.0, num_drugs=4, seed=None):
         data, v_N = define_eight_state_landscapes(), None
     elif name == "rmf":
         data = define_rmf_landscapes(N=N, sigma=sigma, num_drugs=num_drugs,
-                                     pop_size=POP_SIZE, max_Ns=MAX_NS, seed=seed)
+                                     pop_size=POP_SIZE, max_Ns=max_Ns, seed=seed)
         v_N = None
     else:
         raise ValueError(f"Unknown dataset: {name}")
@@ -155,12 +163,12 @@ def make_plot(df, out_dir, tag):
     df = df.assign(ratio_mdp=df["fit_mdp"] / df["fit_best_single"],
                    ratio_rl=df["fit_rl"] / df["fit_best_single"],
                    ratio_random=df["fit_random"] / df["fit_best_single"])
-    grouped = df.groupby("genotypes")[["mdp_s", "rl_s", "fit_mdp", "fit_rl", "fit_best_single", "fit_random", "ratio_mdp", "ratio_rl", "ratio_random"]]
+    grouped = df.groupby(["genotypes", "Ns"])[["mdp_s", "rl_s", "fit_mdp", "fit_rl", "fit_best_single", "fit_random", "ratio_mdp", "ratio_rl", "ratio_random"]]
     mean, sem = grouped.mean(), grouped.sem()
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     x = np.arange(len(mean))
-    labels = [f"{g} genotypes" for g in mean.index]
+    labels = [f"{g} genotypes\nNs={s:g}" for g, s in mean.index]
 
     # Left: runtime
     ax = axes[0]
@@ -214,14 +222,15 @@ def main():
     ap.add_argument("--N", type=int, nargs="+", default=[3], help="RMF loci per landscape (genotypes = 2^N)")
     ap.add_argument("--sigma", type=float, default=1.0, help="RMF noise SD (1.0 rugged, 0.0 smooth)")
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2, 3, 4], help="one RMF landscape per seed")
-    ap.add_argument("--L", type=int, default=3, help="MDP grid points per axis (run_plots default)")
+    ap.add_argument("--Ns", type=float, nargs="+", default=[MAX_NS], help="max |N*s| per landscape (selection strength)")
+    ap.add_argument("--L", type=int, default=None, help="MDP grid points per axis (run_plots default)")
     ap.add_argument("--epochs", type=int, default=300, help="PPO epochs (run_plots uses 300)")
     ap.add_argument("--eval-runs", type=int, default=20, help="evaluation runs per policy")
     ap.add_argument("--eval-steps", type=int, default=10000, help="steps per evaluation run")
     ap.add_argument("--skip-rl", action="store_true")
     args = ap.parse_args()
     
-    tag = f"N{'-'.join(map(str, args.N))}_sig{args.sigma}_seeds{'-'.join(map(str, args.seeds))}_L{args.L}_epochs{args.epochs}_eval-runs{args.eval_runs}_eval-steps{args.eval_steps}"
+    tag = f"N{'-'.join(map(str, args.N))}_sig{args.sigma}_Ns{'-'.join(map(str, args.Ns))}_seeds{'-'.join(map(str, args.seeds))}_L{args.L or 'auto'}_epochs{args.epochs}_eval-runs{args.eval_runs}_eval-steps{args.eval_steps}"
 
     out_dir = project_root / "log" / "runtime"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -230,19 +239,20 @@ def main():
 
     name = "rmf"
 
-    for N, seed in itertools.product(args.N, args.seeds):
-        landscapes, num_drugs, v_N, g_min, g_max, reward_scale = load_dataset(name, N=N, sigma=args.sigma, seed=seed)
+    for N, Ns, seed in itertools.product(args.N, args.Ns, args.seeds):
+        landscapes, num_drugs, v_N, g_min, g_max, reward_scale = load_dataset(name, N=N, sigma=args.sigma, seed=seed, max_Ns=Ns)
         env = make_eval_env(name, landscapes, num_drugs, v_N, args.eval_steps, reward_scale)
-        print(f"\n=== {name} N={N} seed={seed}: {env.num_genotypes} genotypes, {num_drugs} drugs ===")
+        print(f"\n=== {name} N={N} Ns={Ns} seed={seed}: {env.num_genotypes} genotypes, {num_drugs} drugs ===")
 
-        print(f"Solving MDP (L={args.L})...")
-        mdp, mdp_s = solve_mdp(env, args.L)
+        L = args.L if args.L is not None else L_BINS[N]
+        print(f"Solving MDP (L={L})...")
+        mdp, mdp_s = solve_mdp(env, L)
         print(f"MDP done in {mdp_s:.1f}s")
 
         policy, rl_s = None, float("nan")
         if not args.skip_rl:
             print(f"Training PPO ({args.epochs} epochs)...")
-            policy, rl_s = train_rl(name, f"rmf_N{N}_sig{args.sigma}_Ns{MAX_NS}_seed{seed}", env, landscapes, num_drugs, v_N, reward_scale, args.epochs)
+            policy, rl_s = train_rl(name, f"rmf_N{N}_sig{args.sigma}_Ns{Ns}_seed{seed}", env, landscapes, num_drugs, v_N, reward_scale, args.epochs)
             print(f"PPO done in {rl_s:.1f}s")
 
         print("Evaluating policies...")
@@ -259,7 +269,7 @@ def main():
         fit_single = min(ev(lambda obs, d=d: d) for d in range(num_drugs))
 
         rows.append({
-            "dataset": name, "N": N, "sigma": args.sigma, "seed": seed, "genotypes": n, "drugs": num_drugs, "L": args.L,
+            "dataset": name, "N": N, "Ns": Ns, "sigma": args.sigma, "seed": seed, "genotypes": n, "drugs": num_drugs, "L": L,
             "epochs": args.epochs, "mdp_s": mdp_s, "rl_s": rl_s,
             "fit_mdp": fit_mdp, "fit_rl": fit_rl,
             "fit_best_single": fit_single, "fit_random": fit_random,
