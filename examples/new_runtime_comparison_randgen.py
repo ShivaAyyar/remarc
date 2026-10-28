@@ -163,12 +163,12 @@ def make_plot(df, out_dir, tag):
     df = df.assign(ratio_mdp=df["fit_mdp"] / df["fit_best_single"],
                    ratio_rl=df["fit_rl"] / df["fit_best_single"],
                    ratio_random=df["fit_random"] / df["fit_best_single"])
-    grouped = df.groupby(["genotypes", "Ns"])[["mdp_s", "rl_s", "fit_mdp", "fit_rl", "fit_best_single", "fit_random", "ratio_mdp", "ratio_rl", "ratio_random"]]
+    grouped = df.groupby(["genotypes", "Ns", "L"])[["mdp_s", "rl_s", "fit_mdp", "fit_rl", "fit_best_single", "fit_random", "ratio_mdp", "ratio_rl", "ratio_random"]]
     mean, sem = grouped.mean(), grouped.sem()
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     x = np.arange(len(mean))
-    labels = [f"{g} genotypes\nNs={s:g}" for g, s in mean.index]
+    labels = [f"{g} genotypes\nNs={s:g}, L={l}" for g, s, l in mean.index]
 
     # Left: runtime
     ax = axes[0]
