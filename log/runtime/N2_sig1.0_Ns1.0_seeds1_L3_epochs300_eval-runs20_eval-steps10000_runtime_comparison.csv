@@ -1,0 +1,2 @@
+dataset,N,Ns,sigma,seed,genotypes,drugs,L,epochs,mdp_s,rl_s,fit_mdp,fit_rl,fit_best_single,fit_random
+rmf,2,1.0,1.0,1,4,4,3,300,0.11193607602035627,2870.429484498047,0.3202118190126026,0.25041251360290756,0.53217367093601,0.506694634127711
